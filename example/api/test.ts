@@ -2,25 +2,63 @@ export const config = {
   runtime: "edge",
 };
 
-export default async function handler() {
-  const encoder = new TextEncoder();
+class ReplyStream {
+  private controller?: ReadableStreamDefaultController;
+  private encoder: TextEncoder;
 
-  const readable = new ReadableStream({
-    async start(controller) {
-      controller.enqueue(encoder.encode("{}\n"));
-      await delay(500);
-      controller.enqueue(encoder.encode(`{"a": 1}\n`));
-      await delay(500);
-      controller.enqueue(encoder.encode(`{"a": 2}\n`));
-      controller.close();
+  constructor() {
+    this.encoder = new TextEncoder();
+  }
+
+  private streamInit = {
+    start: (controller: ReadableStreamDefaultController) => {
+      this.controller = controller;
     },
-  });
+    cancel: () => {
+      this.close();
+    },
+  };
 
-  return new Response(readable, {
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
+  private readable: ReadableStream = new ReadableStream(this.streamInit);
+
+  send(data: any) {
+    if (!this.controller) {
+      throw new Error("Stream not started yet.");
+    }
+    const jsonString = "data: " + JSON.stringify(data) + "\n\n";
+    this.controller.enqueue(this.encoder.encode(jsonString));
+  }
+
+  close() {
+    if (this.controller) {
+      this.controller.close();
+    }
+  }
+
+  toResponse() {
+    return new Response(this.readable, {
+      headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+    });
+  }
 }
+
+export default async () =>
+  streamReply(async (stream) => {
+    stream.send({});
+    await delay(500);
+    stream.send({ a: 1 });
+    await delay(3000);
+    stream.send({ a: 2 });
+  });
 
 function delay(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
+}
+
+async function streamReply(handler: (stream: ReplyStream) => Promise<void>) {
+  const stream = new ReplyStream();
+
+  handler(stream);
+
+  return stream.toResponse();
 }
